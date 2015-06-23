@@ -1,0 +1,533 @@
+\chapter{启动xserver}
+
+\section{参数说明}
+
+在命令行上运行如下命令，能够获得xserver支持的全部参数列表：
+\begin{bashcode}
+$ ./xserver --help
+  2014/06/03 19:05:34 [compile]: 2014-06-03 19:05:16 +0800 by go version ...
+  2014/06/03 19:05:34 [version]: 2014-06-03 18:58:15 +0800 @a98c0a1
+  Usage:
+    -apps="": application names, separated by comma
+    -debug=false: send log to stdio
+    -heartbeat=60: keep alive message from server, in [1, 60] seconds
+    -http="": default http port
+    -listen="": RPC listen port
+    -manage=500: session management interval, in [100, 10000] milliseconds
+    -ncpu=1: maximum number of CPUs, in [1, 1024]
+    -parallel=32: number of parallel worker-routins per connection, in [1, 1024]
+    -remote="": RPC remote port
+    -retrans="500,500,1000,1500,1500,2500,3000,4000,5000,7500,10000,15000": retransmission intervals, in [100, 30000] milliseconds
+    -rtmfp="1935": rtmfp ports list, for example, '1935,1936,1937'
+\end{bashcode}
+
+\begin{small}
+    \begin{longtable}[htbp]
+        {@{\hspace{0.8em}}>{\raggedright}p{0.1\textwidth}|>{\raggedright}p{0.1\textwidth}|>{\raggedright}p{0.7\textwidth}}
+        \toprule[1.4pt]
+        \hline
+        \multicolumn{1}{c|}{\textbf{参数名}} & \multicolumn{1}{c|}{\textbf{缺省值}} & \multicolumn{1}{c}{\textbf{参数说明}}
+        \endhead
+        \hline\hline
+        -ncpu & 1 & \textbf{并发使用CPU个数} \\
+        例如：8核机器-ncpu=8，24核机器-ncpu=16等；如果考虑到cache对多线程程序的影响，应该配合使用taskset来启动
+        \tabularnewline\hline
+        -rtmfp & 1935 & {\bf{监听UDP端口号列表}} \\
+        多个端口用逗号分隔，例如：-rtmfp=1935,1936,1937
+        \tabularnewline\hline
+        -parallel & 32 & {\bf{每个UDP端口并发routine个数}} \\
+        parallel $\times$ rtmfp的值控制在 ncpu 的2到4倍为好，太大了没有意义
+        \tabularnewline\hline
+        -apps & & {\bf{接受的app名称列表}} \\
+        多个app用逗号分隔，例如：-apps=introduction,test
+        \tabularnewline\hline
+        -http & & {\bf{状态监控端口}} \\
+        建议打开，通过该端口可以监控程序运行状态和调试，例如：-http=6000
+        \tabularnewline\hline
+        -listen & & {\bf{RPC监听端口}} \\
+        例如：-listen=3000，表示监听3000端口
+        \tabularnewline\hline
+        -remote & & {\bf{RPC发送目标ip:port}} \\
+        例如：-remote=127.0.0.1:2000，表示将所有RPC消息发送到对应服务器，如果服务器不存在或者连接异常，数据将会被丢弃
+        \tabularnewline\hline
+        -retrans & 备注\footnote{-retrans=500,500,1000,1500,1500,2500,3000,4000,5000,7500,10000,15000} & {\bf{丢包重传延迟列表(毫秒)}} \\
+        参数指定了丢包重传的时间间隔，当重传次数超过参数个数时将按照最后一个参数指定的间隔进行重传；合法区间为[100ms,30000ms]
+        \tabularnewline\hline
+        -manage & 500 & {\bf{重传策略扫描间隔(毫秒)}} \\
+        服务器以manage为周期扫描所有session的发送队列，根据retrans指定的重传策略决定数据包是否重传；合法区间为[100ms,10000ms]
+        \tabularnewline\hline
+        -heartbeat & 60 & {\bf{超时检测间隔(秒)}} \\
+        服务器超过6$\times$ heartbeat(s)未收到客户端任何数据时，就会认定连接丢失，
+        在此之前服务器会通过发送心跳包来挽救；合法区间[1s,60s]
+        \tabularnewline\hline
+        -debug & false & {\bf{调试信息输出到stdout}} \\
+        该参数的作用是将打开的debug信息平行输出到stdout，仅仅方便开发过程的调试
+        \tabularnewline\hline
+        \bottomrule[1.2pt]
+        \caption{xserver参数说明}
+    \end{longtable}
+\end{small}
+
+\subsection{重传策略}
+
+xserver的重传策略是在旧xserver的基础上改进而来，2点具体如下：
+\begin{itemize}
+    \item [A.] 程序以manage为周期扫描每一个NetStream，
+        找到序列号最大的未确认的数据包（旧的实现是找到所有未确认的数据包），
+        如果该数据包满足retrans所约定的重传间隔，则对该数据包进行重传；
+    \item [B.] 客户端收到数据包会给服务器发送ack，
+        其中包含了客户端的缺包的信息，服务端根据这些信息找到对应的数据包，
+        如果数据包距离上次发送时间间隔超过100ms，则对该数据包进行冲传；
+\end{itemize}
+
+这个改进（即只重传最后一个，而不是全部未确认的数据包）的好处是，
+能够做到在最小数据重传的前提下，尽快恢复连接的稳定性，
+同时获得更低的带宽浪费和CPU开销。
+尤其是针对P2P过程这种大连接数应用场景，效果会更加明显。
+
+但是缺点是，如果同一个NetStream丢包数量不止1个，
+那么服务器至少要2次才能将所有未确认的数据包再次发送给前端，
+特别是如果客户端发送给服务器的ack也存在一定概率的丢包的话，
+这种策略消耗的时间会更长。
+不过通过合理的设置retrans值，能够将这种情况带来的影响降到最小。
+
+下面给出一个例子：服务端未确认的数据包序号为\{23,24,25\}。
+旧xserver策略下（图\ref{chap1:oldtrans})，每次重传过程都会将三个数据包同时重传，
+直到收到客户端的确认为止；新xserver策略下（图\ref{chap1:newtrans}），
+每次只会重传序号最大的数据包，这样服务端能够从客户端的ack中获取尚未确认的数据包序号，
+并由此驱动进一步重传。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=0.05\textwidth,y=1em,auto,start chain=going below]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18pt,draw,node distance=0pt,inner sep=0pt]
+        \tikzstyle{note}=[draw=none,above,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0pt]
+        \tikzstyle{state}=[fill=white,circle,inner sep=0pt,minimum height=9pt]
+        {
+            \node[note] (labelc) at (0, 0) {Client};
+            \node[note] (labels) at (100pt, 0) {Server};
+            \node[note] at (50pt, -130pt) {\small{一次成功}};
+
+            \draw let \p1=(labelc.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3pt) -- +(0,-130pt);
+
+            \draw let \p1=(labels.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3pt) -- +(0,-130pt);
+
+            \node[state,node distance=25pt] (s1) [below of=labels] {};
+            \node[state,node distance=50pt] (s2) [below of=s1] {};
+            \node[state,node distance=50pt] (c1) [below of=labelc] {};
+
+            \path[above,every node/.style={font=\sffamily\tiny}]
+                (s1) -- node[sloped] {msg=23,24,25} (c1)
+                (c1) -- node[sloped] {ack=23,24,25} (s2);
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (s1) edge (c1)
+                (c1) edge (s2);
+        }
+        {
+            \node[note] (labelc) at (200pt, 0) {Client};
+            \node[note] (labels) at (300pt, 0) {Server};
+            \node[note] at (250pt, -130pt) {\small{多次失败}};
+
+            \draw let \p1=(labelc.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3pt) -- +(0,-130pt);
+
+            \draw let \p1=(labels.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3pt) -- +(0,-130pt);
+
+            \node[state,node distance=25pt] (s1) [below of=labels] {};
+            \node[state,node distance=25pt] (s2) [below of=s1] {};
+            \node[state,node distance=25pt] (s3) [below of=s2] {};
+            \node[state,node distance=50pt] (s4) [below of=s3] {};
+            \node[state,node distance=50pt] (c1) [below of=labelc] {};
+            \node[state,node distance=25pt] (c2) [below of=c1] {};
+            \node[state,node distance=25pt] (c3) [below of=c2] {};
+
+            \path[above,every node/.style={font=\sffamily\tiny}]
+                (s1) -- node[sloped] {msg=23,24,25} (c1)
+                (s2) -- node[sloped] {msg=23,24,25} (c2)
+                (s3) -- node[sloped] {msg=23,24,25} (c3)
+                (c3) -- node[sloped] {ack=23,24,25} (s4);
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (s1) edge[dashed] (c1)
+                (s2) edge[dashed] (c2)
+                (s3) edge (c3)
+                (c3) edge (s4);
+        }
+    \end{tikzpicture}
+}
+\caption{旧xserver重传策略示意图}\label{chap1:oldtrans}
+\end{figure}
+\end{small}
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=0.05\textwidth,y=1em,auto,start chain=going below]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18pt,draw,node distance=0pt,inner sep=0pt]
+        \tikzstyle{note}=[draw=none,above,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0pt]
+        \tikzstyle{state}=[fill=white,circle,inner sep=0pt,minimum height=9pt]
+        {
+            \node[note] (labelc) at (0, 0) {Client};
+            \node[note] (labels) at (100pt, 0) {Server};
+            \node[note] at (50pt, -180pt) {\small{一次成功}};
+
+            \draw let \p1=(labelc.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3pt) -- +(0,-180pt);
+
+            \draw let \p1=(labels.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3pt) -- +(0,-180pt);
+
+            \node[state,node distance=25pt] (s1) [below of=labels] {};
+            \node[state,node distance=50pt] (s2) [below of=s1] {};
+            \node[state,node distance=50pt] (s3) [below of=s2] {};
+            \node[state,node distance=50pt] (c1) [below of=labelc] {};
+            \node[state,node distance=50pt] (c2) [below of=c1] {};
+
+            \path[above,every node/.style={font=\sffamily\tiny}]
+                (s1) -- node[sloped] {msg=25} (c1)
+                (s2) -- node[sloped] {msg=23,24} (c2)
+                (c1) -- node[sloped] {ack=25,miss=23,24} (s2)
+                (c2) -- node[sloped] {ack=23,24} (s3);
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (s1) edge (c1)
+                (s2) edge (c2)
+                (c1) edge (s2)
+                (c2) edge (s3);
+        }
+        {
+            \node[note] (labelc) at (200pt, 0) {Client};
+            \node[note] (labels) at (300pt, 0) {Server};
+            \node[note] at (250pt, -180pt) {\small{多次失败}};
+
+            \draw let \p1=(labelc.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3pt) -- +(0,-180pt);
+
+            \draw let \p1=(labels.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3pt) -- +(0,-180pt);
+
+            \node[state,node distance=25pt] (s1) [below of=labels] {};
+            \node[state,node distance=25pt] (s2) [below of=s1] {};
+            \node[state,node distance=25pt] (s3) [below of=s2] {};
+            \node[state,node distance=50pt] (s4) [below of=s3] {};
+            \node[state,node distance=50pt] (s5) [below of=s4] {};
+            \node[state,node distance=50pt] (c1) [below of=labelc] {};
+            \node[state,node distance=25pt] (c2) [below of=c1] {};
+            \node[state,node distance=25pt] (c3) [below of=c2] {};
+            \node[state,node distance=50pt] (c4) [below of=c3] {};
+
+            \path[above,every node/.style={font=\sffamily\tiny}]
+                (s1) -- node[sloped] {msg=25} (c1)
+                (s2) -- node[sloped] {msg=25} (c2)
+                (s3) -- node[sloped] {msg=25} (c3)
+                (s4) -- node[sloped] {msg=23,24} (c4)
+                (c3) -- node[sloped] {ack=25,miss=23,24} (s4)
+                (c4) -- node[sloped] {ack=23,24} (s5);
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (s1) edge[dashed] (c1)
+                (s2) edge[dashed] (c2)
+                (s3) edge (c3)
+                (s4) edge (c4)
+                (c3) edge (s4)
+                (c4) edge (s5);
+        }
+    \end{tikzpicture}
+}
+\caption{新xserver重传策略示意图}\label{chap1:newtrans}
+\end{figure}
+\end{small}
+
+重传策略的选择上，主要受retrans,manage,heartbeat这三个参数影响。这些参数会影响服务器的性能以及连接的稳定性。
+
+\subsubsection{-retrans}
+该参数决定了两次数据重传之间的时间间隔。以-retrans=300,500,10000为例，
+重传状态一共有三个，分别为\{0,1,2\}。
+其中，状态转移A,B是服务器主动完成的（以manage规定的周期进行扫描并判断）；状态转移C受客户端发送的ack驱动。
+具体的描述如下：
+\begin{itemize}
+    \item [A.] 距离上一次重传时间满足重传间隔，重传数据包并则增加状态序号；
+    \item [B.] 距离上一次重传时间小于重传间隔，或者没有需要重传的数据包，什么都不做；
+    \item [C.] 收到来自客户端的ack消息，对缺失的并且发送间隔至少100ms的数据包重传，并重置重传状态计数器；
+\end{itemize}
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=0.05\textwidth,y=1em,auto,start chain=going below]
+        \tikzstyle{every node}=[fill=none,minimum height=18pt,draw=none,node distance=120pt]
+        \tikzstyle{state}=[circle,fill=white,draw,font=\sffamily\large]
+        {
+            \node[state,initial] (0) {0};
+            \node[state] (1) [below left of=0] {1};
+            \node[state] (2) [below right of=0] {2};
+
+            \path[->,>=stealth',shorten >=1pt,auto,thick,very node/.style={font=\sffamily\small}]
+                (0) edge [bend right] node [left] {A} (1)
+                    edge [loop above] node {B} (0)
+                    edge [loop right] node {C} (0)
+                (1) edge node [right] {C} (0)
+                    edge [loop left] node {B} (1)
+                    edge [bend right] node [above] {A} (2)
+                (2) edge [loop right] node {B} (2)
+                    edge [loop above] node {A} (2)
+                    edge node [right] {C} (0);
+        }
+    \end{tikzpicture}
+}
+\caption{retrans状态转移过程}
+\end{figure}
+\end{small}
+
+除此之外，设置retrans的过程还需要考虑的是，客户端的丢包重传策略是2分钟内进行大概20次，
+与retrans的默认值近似。
+
+\subsubsection{-manage}
+
+该参数影响的是服务器对丢包扫描的频率。
+
+如果manage的值大于retans的最小值，那么后者实际上是失效的；
+反之，如果manage过小，那么retrans又会起作用，
+大部分时间服务线程都在进行无效的扫描。
+所以一个合理的值应该略小于retrans最小值。
+
+对于P2P的大连接数过程，连接数比数据到达的时间更重要，所以通常manage设置的会比较大，比如1秒，以保证更大的吞吐；
+但是对于RPC过程，数据的到达时间更重要，因此manage会设置的比较小。
+
+\subsubsection{-heartbeat}
+
+当服务器发现长时间没有收到来自客户端的数据包时，服务器会主动发送一个心跳包来探测客户端状态。
+这个时间间隔由heartbeat参数决定。
+
+服务器会对客户端进行6次这样的试探，如果连续6次试探都没有返回的话，服务器则认为该客户端连接丢失，
+随即会补发一个主动断开连接的数据包。也就是说，-heartbeat=5意味着：如果客户端丢失，
+服务器一定能在30秒内作出响应。
+
+\subsection{状态监控}
+
+设置http参数能够打开xserver的状态监控接口，以服务器上xserver.test运行的，参数-http=6000的服务为例：
+
+\subsubsection{xserver状态}
+
+下图中提供了查询xserver基本运行状态的url，可以通过{\bf{xids}}和{\bf{cookies}}两个值计算出当前服务器的进入速度，
+从而监控服务器压力。
+
+\begin{bashcode}
+$ curl http://xserver.test:6000/summary
+  {
+      "build": {                     # `{\songti 程序编译时间以及版本控制信息}`
+          "compile": "2014-06-03 18:58:18 +0800 by go version go1.2.2 linux/amd64",
+          "version": "2014-06-03 18:58:15 +0800 @a98c0a1"
+      },
+      "cookies": 8,                  # `{\songti handshake过程未过期的cookie数量（5分钟过期）}`
+      "counts": {                    # `{\songti 内部事件计数器（每分钟更新）}`
+          "cookie.commit": 134,
+          "cookie.new": 196,
+          "cookie.notfound": 12,
+          "cookie.timeout": 63,
+            ... ...
+      },
+      "heap": {                      # `{\songti 参见godoc runtime/MemStats（单位MB）}`
+          "alloc": 881,              # `{\songti - 分配并使用的内存}`
+          "idle": 602,               # `{\songti - idle span}`
+          "inuse": 982,              # `{\songti - non-idle span}`
+          "objects": 0,              # `{\songti - 分别的object个数}`
+          "sys": 1585                # `{\songti - 从系统申请的内存}`
+      },
+      "runtime": {
+          "nproc": 16,               # `{\songti 使用CPU个数}`
+          "routines": 397            # `{\songti 全部routine个数}`
+      },
+      "session": {
+          "aids": 2277,              # `{\songti 用ip:port区分的session数（可能冲突）}`
+          "pids": 2277,              # `{\songti 由sha256计算生成pid区分的session数（可能冲突）}`
+          "xids": 2277,              # `{\songti 分配的unique的xid数（不会冲突）}`
+          "z": {
+              "closed": 0,           # `{\songti 标记为closed并等待清理的session数}`
+              "manage": [
+                  1820,              # `{\songti 发送心跳数为0的session数（不严格准确）}`
+                  67,                # `{\songti 发送心跳数为1的session数（不严格准确）}`
+                  86,                # `{\songti 发送心跳数为2的session数（不严格准确）}`
+                  89,                # `{\songti 发送心跳数为3的session数（不严格准确）}`
+                  75,                # `{\songti 发送心跳数为4的session数（不严格准确）}`
+                  70,                # `{\songti 发送心跳数为5的session数（不严格准确）}`
+                  70                 # `{\songti 发送心跳数为6的session数（不严格准确）}`
+              ]
+          }
+      },
+      "streams": 0,                  # `{\songti 系统中存在的stream个数}`
+      "time": {
+          "boot": 1401793822,        # `{\songti 服务启动时间（单位秒）}`
+          "current": 1402039273      # `{\songti 机器当前时间（单位秒）}`
+      }
+  }
+\end{bashcode}
+
+\subsubsection{hashmap信息}
+
+{\bf{注意：该接口对程序有一定压力，不建议频繁使用。}}
+
+xserver的最初设计需求是单一程序30万左右的连接数。
+所以实现中要考虑到高并发情况下的hash表的效率：
+\begin{itemize}
+    \item [A.] 第一层采用固定桶数的hash，来减小锁的力度；
+    \item [B.] 第二层采用内置hashmap加RWLock的实现来提高并发行；
+\end{itemize}
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto,start chain=going 
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18pt,draw,node distance=0pt,inner sep=0pt]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0pt]
+        \tikzstyle{func}=[draw,circle,inner sep=0pt,minimum height=18pt]
+        \tikzstyle{hash}=[draw,minimum height=18pt,minimum width=18pt,inner sep=4]
+        \tikzstyle{state}=[fill=white,circle,inner sep=0pt,minimum height=9pt]
+        {
+            \node[note] (k) at (20, 0) {key};
+            \node[func] (f) at (60, 0) {f};
+
+            \node[note] at (130, 0) {...};
+            \newcount\dist
+            \foreach \number in {-1,-2,1,2} {
+                \dist=\number
+                \multiply\dist by -30
+                \node[hash] (h1\number) at (130,\dist) {};
+            }
+
+            \node[note] at (200, 0) {...};
+            \foreach \number in {-1,-2,1,2} {
+                \dist=\number
+                \multiply\dist by -30
+                \node[hash] (h2\number) at (200,\dist) {\scriptsize{hashmap}};
+                \draw let \p1=(h2\number.east) in (\x1,\y1)
+                    node[hide,anchor=north west] {}
+                        [-] (\x1,\y1-6) -- +(20,-5)
+                        [-] (\x1,\y1+6) -- +(20,+5);
+            }
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (k) edge (f)
+                (f) edge [bend right] node [left] {} (h11)
+                (h11) edge (h21);
+
+            \foreach \number in {-1,-2,2} {
+                \path[->,>=stealth',shorten >=0.5pt,auto]
+                    (h1\number) edge[dashed] (h2\number);
+            }
+        }
+    \end{tikzpicture}
+}
+\caption{hash表优化}
+\end{figure}
+\end{small}
+
+\begin{bashcode}
+$ curl http://xserver.test:6000/mapsize
+  {
+    "aids":[108,90,96,98,87,90,98,87,...,101,119,101,71,93,101,90,93,111],
+    "pids":[97,101,100,91,90,101,90,85,...,104,83,89,110,96,89,101,83,96,92],
+    "xids":[85,82,98,98,101,102,80,99,...,97,88,83,102,109,93,84,107,79,90]
+  }
+\end{bashcode}
+
+其中，三个数组分别表示按照不同意义组织的hash表第二层的大小。分布越均匀越好。
+
+\subsubsection{session信息}
+
+{\bf{注意：该接口对程序压力巨大，当服务器连接数很大是不要使用。}}
+
+\begin{bashcode}
+$ curl http://xserver.test:6000/dumpall
+  [
+      {
+          "addrs": [                               # `{\songti 客户端内网地址列表}`
+              {
+                  "IP": "192.168.1.104",
+                  "Port": 2473,
+                  "Zone": ""
+              }
+          ],
+          "aid": "221.235.22.194:10680",
+          "closed": false,                         # `{\songti 连接是否已关闭}`
+          "manage": {
+              "cnt": 0,                            # `{\songti 服务端heartbeat状态}`
+              "lasttime": 1402117152384136280      # `{\songti 收到最后一条消息的时间戳}`
+          },
+          "pid": "a248afcb8b4196c5756202bd1cba9af4b0eb76f39b1eac5ab675ad0490c5d4ca",
+          "raddr": "221.235.22.194:10680",         # `{\songti 客户端外网地址}`
+          "xid": 1,                                # `{\songti session在服务端id}`
+          "yid": 33554432                          # `{\songti session在客户端id}`
+      }
+    ... ...
+\end{bashcode}
+
+\subsubsection{stream信息}
+xserver也提供了接口来获取全部stream信息，因为线上通常不用它来做客户端之间的直接消息通信，
+所以返回结果一般为空。
+
+\begin{bashcode}
+$ curl http://xserver.test:6000/streams
+  {}
+\end{bashcode}
+
+\subsection{日志监控}
+xserver在运行过程中会监控当前目录下的特殊文件，如果文件存在，则向文件中追加调试日志；
+如果文件不存在，对应的日志服务则会关闭。对照如下：
+
+\begin{itemize}
+    \item [a.] log/outlog 记录各种状态调试信息，由其会打印大量加密前的rtmfp协议包；
+    \item [b.] log/errlog 记录运行时的各种错误，例如rtmfp数据包错误等等；
+    \item [c.] log/ssslog 记录session建立、关闭以及强制关闭等信息；
+    \item [d.] log/tcplog 记录与后端RPC通信过程中的发送、接受以及主动抛弃的数据包；
+\end{itemize}
+
+在线下调试过程中，配合-debug参数，能够将这些日志信息打印到stdout中，方便调试。
+
+\section{典型参数}
+{\bf{注意：多线程程序不是CPU越多越好，因为线程间同步以及cache一致性的开销也会变大。
+例如在32核机器上运行8个相同实例，建议使用taskset启动：将全部CPU分成8组，
+并确保每组CPU在同一个node/socket上。以减少竞争，增加cache局部性。}}
+
+\subsection{游戏参数}
+\begin{bashcode}
+$ nohup ./xserver -ncpu=4 -parallel=32 -rtmfp=2000 -http=5000 \
+    -listen=3000 -remote=127.0.0.1:4000 \
+	-heartbeat=5 -manage=200 \
+    -retrans=200,300,500,700,1000,1500,2000,4000,5000,7500,10000,15000 \
+    -apps=introduction,test &
+\end{bashcode}
+
+\subsection{P2P参数}
+\begin{bashcode}
+$ nohup ./xserver -ncpu=16 -parallel=32 -rtmfp=2000 -http=5000 \
+    -apps=introduction,test &
+\end{bashcode}
+
+\subsection{调试过程}
+\begin{bashcode}
+$ nohup ./xserver -rtmfp=2000 -http=5000 \
+    -listen=3000 -remote=127.0.0.1:4000 \
+    -apps=introduction,test -debug=true &
+\end{bashcode}
+

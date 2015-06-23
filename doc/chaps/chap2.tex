@@ -1,0 +1,213 @@
+\chapter{Java通信接口}
+
+\section{消息格式}
+xserver与java之间的RPC通信建立在tcp之上，并通过protobuf编码的。结构如图：
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto,start chain=going below]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18pt,draw,node distance=0pt,inner sep=0pt]
+        \tikzstyle{note}=[draw=none,above,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0pt]
+        \tikzstyle{state}=[inner sep=0pt,minimum height=18pt,minimum width=60pt]
+        {
+            \node[hide] at (-80, +20) {xserver};
+            \node[hide] at (130, +20) {java};
+
+            \draw[color=gray,thick](30, 44) rectangle (230,-140);
+            \node[hide] at (+180, -133) {\textit{\footnotesize{XServerData2}}};
+
+            \node[state] (x1) at (-80, 0) {protobuf};
+            \node[state] (j1) at (+80, 0) {protobuf};
+
+            \node[state,node distance=50] (x2) [below of=x1] {bytes};
+            \node[state,node distance=50] (x3) [below of=x2] {message};
+
+            \node[state,node distance=50] (j2) [below of=j1] {bytes};
+            \node[state,node distance=50] (j3) [below of=j2] {message};
+
+            \node[state,node distance=100] (j4) [right of=j1] {request};
+            \node[state,node distance=25] (j5) [below of=j4] {response};
+            \node[state,node distance=25] (j6) [below of=j5] {broadcast};
+            \node[state,node distance=25] (j7) [below of=j6] {close};
+
+            \path[<->,>=stealth',shorten >=1pt,auto,thick,very node/.style={font=\sffamily\small}]
+                (x3) edge node[hide,above] {tcp} (j3)
+                (x2) edge (x3)
+                (x1) edge (x2)
+                (j2) edge (j3)
+                (j1) edge (j2)
+                (j1) edge[->,dotted] (j4)
+                (j5.west) edge[->,dotted] (j1)
+                (j6.west) edge[->,dotted] (j1)
+                (j7.west) edge[->,dotted] (j1);
+        }
+    \end{tikzpicture}
+}
+\caption{RPC过程数据包处理示意图}
+\end{figure}
+\end{small}
+
+\subsubsection{tcp层数据包格式}
+
+在tcp连接上传输的数据包由三部分组成，以发送序列化后长度为13565=0x34fd个字节的protobuf数据包为例：
+
+\begin{itemize}
+    \item [a.] 先是4字节魔数，值为 0xdeadbeaf；
+    \item [b.] 再是4字节数据包长度，本例为 0x34fd；
+    \item [c.] 最后是将全部数据包内容；
+\end{itemize}
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,transform shape,font=\sffamily\small]
+        \tikzstyle{data} = [draw=black,minimum width=30, minimum height=30, node distance=30,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!25]
+        \tikzstyle{data1} = [data,fill=gray!55]
+        {
+            \node[data0] (m1) {0xde};
+            \node[data0] (m2) [right of=m1] {0xad};
+            \node[data0] (m3) [right of=m2] {0xbe};
+            \node[data0] (m4) [right of=m3] {0xaf};
+
+            \node[data1] (s1) [right of=m4] {0x00};
+            \node[data1] (s2) [right of=s1] {0x00};
+            \node[data1] (s3) [right of=s2] {0x34};
+            \node[data1] (s4) [right of=s3] {0xfd};
+
+            \node[data] (b1) [right of=s4] {};
+            \node[data] (b2) [right of=b1] {};
+            \node[data,draw=none,fill=none] (b3) [right of=b2] {...};
+            \node[data] (b4) [right of=b3] {};
+            \node[data] (b4) [right of=b4] {};
+
+            \draw[decorate,decoration={brace,amplitude=10}]
+			    (370,-18) -- (230,-18) node[black,midway,yshift=-20] {\small{数据包内容（共0x34fd字节）}};
+            \draw[decorate,decoration={brace,amplitude=10}]
+			    (100,-18) -- (-10,-18) node[black,midway,yshift=-20pt] {\small{魔数=0xdeadbeaf}};
+            \draw[decorate,decoration={brace,amplitude=10}]
+			    (220,-18) -- (110,-18) node[black,midway,yshift=-20pt] {\small{数据包大小=0x34fd}};
+        }
+    \end{tikzpicture}
+}
+\caption{RPC过程数据包格式}\label{chap1:RPCdata}
+\end{figure}
+\end{small}
+
+\section{消息类型}
+
+\subsection{request消息}
+
+java 程序从xserver 收到的消息格式定义为 request，所有字段含义如下：
+
+\begin{javacode}
+public class XServerData {
+    public static class Request {
+        public int port;           # `{\songti xserver listen端口号}`
+        public String code;        # `{\songti request过程操作类型：只有\{join,exit,call\}三种取值}`
+        public int xid;            # `{\songti 对应的session id}`
+        public String addr;        # `{\songti 客户端外网地址}`
+        public boolean reliable;   # `{\songti 消息是否为reliable}`
+        public double callback;    # `{\songti 客户端callback}`
+        public Amf0Input input;    # `{\songti request调用内容}`
+    }
+\end{javacode}
+
+使用时只需要阻塞的调用如下静态函数即可，具体实现请参见源代码：
+
+\begin{javacode}
+    public static Request parseRequest(InputStream is) throws Exception;
+\end{javacode}
+
+\subsubsection{join消息}
+当客户端与xserver建立连接，无论有无进一步数据通信，xserver都会向后端RPC服务发送``join''消息。
+则此时request只有如下四个字段有意义：
+
+\begin{javacode}
+    public static class Request {
+        public int port;
+        public String code = "join";
+        public int xid;
+        public String addr;
+    }
+\end{javacode}
+
+\subsubsection{exit消息}
+当客户端与xserver断开连接，包括客户端主动断开或者被xserver被动踢掉，xserver都会向后端RPC服务发送``exit''消息。
+
+\begin{javacode}
+    public static class Request {
+        public int port;
+        public String code = "exit";
+        public int xid;
+        public String addr;
+    }
+\end{javacode}
+
+\subsubsection{call消息}
+该过程是真正的客户端到后端服务的RPC过程。过程中全部字段都有意义：
+\begin{javacode}
+    public static class Request {
+        public int port;
+        public String code = "call";
+        public int xid;
+        public String addr;
+        public boolean reliable;   # `{\songti false表示数据由proxySend2发出；否则为true}`
+        public double callback;    # `{\songti ！= 0表示客户端有有效callback handler；否则为0}`
+        public Amf0Input input;    # `{\songti ！= null表示有有效content数据；否则为null}`
+    }
+\end{javacode}
+
+\subsection{response消息}
+
+当服务端需要调用客户端的callback handler时，例如：服务端收到callback!=0的reqeust，并完成服务，现在将要返回调用结果给客户端时，
+需要通过response接口来完成：
+
+\begin{javacode}
+    public static byte[] newResponse(int xid, byte[] data, double callback, boolean reliable) throws Exception;
+\end{javacode}
+
+该函数生成完整的response消息：魔数+消息大小+消息内容，参见图\ref{chap1:RPCdata}。
+例如：
+\begin{javacode}
+    OutputStream os = socket.getOutputStream();
+    os.write(XServerData2.newResponse(xid, data, callback, reliable));
+    os.flush();
+\end{javacode}
+
+此外额外的参数说明如下：
+
+\begin{itemize}
+    \item [a.] data 表示发送的数据，例如序列化后的amf数据；可以为空，即null
+    \item [b.] callback 表示客户端callback handler，通常来自 request
+    \item [c.] reliable 表示消息是否由xserver保证消息可靠，如果为false，消息可能会由于网络问题造成丢失
+\end{itemize}
+
+{\bf{注意：reliable和unreliable消息不要频繁交替发送，
+否则客户端可能会由于之前reliable消息的丢包重传造成unreliable消息的deliver延迟。}}
+
+\subsection{broadcast消息}
+
+当服务器需要向单个或者多个客户端广播消息时，需要使用broadcast消息接口：
+
+\begin{javacode}
+    public static byte[] newBroadcastMesssage(List<Integer> xids, byte[] data, boolean reliable) throws Exception;
+\end{javacode}
+
+使用方法以及注意事项与response过程相同。
+不同的是，该过程消息会被deliver到NetConnection的回调函数上，如果是reliable消息，
+回调函数为recvPull，否则为recvPull2。
+
+\subsection{close消息}
+
+当后端java主动断开客户端的连接时可以使用该接口：
+\begin{javacode}
+    public static byte[] newCloseMessage(List<Integer> xids) throws Exception;
+\end{javacode}
+
+xserver收到该函数请求后，会主动断开与客户端的连接。并想后端java发送code为``exit''的request消息。
+

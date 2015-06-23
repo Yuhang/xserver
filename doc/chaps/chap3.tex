@@ -1,0 +1,2075 @@
+\chapter{RTMFP协议}
+
+xserver仅仅实现了与P2P和RPC有关的最小协议集合。按照实现先后，主要包括：握手、Session数据以及P2P三个过程。
+
+\section{基本数据包}
+
+\subsubsection{数据包大小}
+RTMFP协议基于UDP，通信过程中，服务器要保证每个UDP包大小不超过1400字节。
+
+\subsubsection{生成密钥过程}
+RTMFP通信过程中，数据是通过AES128加密的，
+因此在建立连接的最初阶段，
+客户端和服务去通过DH加密算法协商产生两组密钥，分别用于两个方向上的通信。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto,start chain=going below]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=white]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{state}=[fill=white,circle,inner sep=0,minimum height=9]
+        {
+
+            \node[note] (text) at (-70, 0) {\small{已知 $g,p$}};
+            \node[note] (labels) at (0, +50) {Server};
+            \node[note] (labelc) at (0, -50) {Client};
+
+            \draw let \p1=(labelc.east) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1+10,\y1) -- +(340,0);
+
+            \draw let \p1=(labels.east) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1+10,\y1) -- +(340,0);
+
+            \node[state,node distance=80] (s1) [right of=labels] {};
+            \node[state,node distance=100] (s2) [right of=s1] {};
+            \node[state,node distance=120] (s3) [right of=s2] {};
+
+            \node[state,node distance=80] (c1) [right of=labelc] {};
+            \node[state,node distance=100] (c2) [right of=c1] {};
+            \node[state,node distance=120] (c3) [right of=c2] {};
+
+            \node[note,node distance=15] [above of=s1] {\footnotesize{$x_a=g^a \mod p$}};
+            \node[note,node distance=15] [below of=c1] {\footnotesize{$x_b=g^b \mod p$}};
+
+            \node[note,node distance=15] [above of=s2] {\footnotesize{$k_a=x_b^a \mod p$}};
+            \node[note,node distance=15] [below of=c2] {\footnotesize{$k_b=x_a^b \mod p$}};
+
+            \node[note,node distance=25] [above of=s3] {\footnotesize\makecell[c]{$encrypt=hmac(k_a, \lambda_2,\lambda_1)$\\$decrypt=hmac(k_a, \lambda_1,\lambda_2)$}};
+            \node[note,node distance=25] [below of=c3] {\footnotesize\makecell[c]{$encrypt=hmac(k_b, \lambda_1,\lambda_2)$\\$decrypt=hmac(k_b, \lambda_2,\lambda_1)$}};
+
+            \path[->,>=stealth',shorten >=1,auto]
+                (text) edge node[hide] {\footnotesize{$b=gen()$}} (labelc)
+                (text) edge node[hide] {\footnotesize{$a=gen()$}} (labels);
+
+            \path[->,>=stealth',shorten >=1,auto,dashed,thick]
+                (s1) edge (c2)
+                (c1) edge (s2)
+                (s2) edge (c3)
+                (c2) edge (s3);
+
+            \node[note,node distance=32] [below right of=s1] {\small{send $x_a$}};
+            \node[note,node distance=32] [above right of=c1] {\small{send $x_b$}};
+
+            \node[note,node distance=32] [below right of=s2] {\small{send $\lambda_1$}};
+            \node[note,node distance=32] [above right of=c2] {\small{send $\lambda_2$}};
+    }
+    \end{tikzpicture}
+}
+\caption{密钥生成过程}
+\end{figure}
+\end{small}
+
+\subsubsection{数据包格式}
+协议中，客户端与服务端通信是无链接的，因此通信过程中，需要在数据包中保存session有关的信息，如图所示：
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto,start chain=going below]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{state}=[fill=white,circle,inner sep=0,minimum height=9]
+        {
+
+            \node[note] (y0) at (-130, +50) {\small{yid=301}};
+            \node[note,node distance=20] (y1) [below of=y0] {\small{yid=302}};
+            \node[note,node distance=20] (y2) [below of=y1] {\small{yid=303}};
+            \node[note,node distance=20] (y3) [below of=y2] {\small{...}};
+            \node[note,node distance=20] (y4) [below of=y3] {\small{yid=319}};
+            \node[note,node distance=20] (y5) [below of=y4] {\small{...}};
+
+            \node[note,node distance=50] [right of=y4] {\scriptsize{\makecell[l]{encrypt=$key_1$\\decrypt=$key_2$\\xid=528}}};
+
+            \node[note] (x0) at (130, +50) {\small{xid=501}};
+            \node[note,node distance=20] (x1) [below of=x0] {\small{xid=502}};
+            \node[note,node distance=20] (x2) [below of=x1] {\small{xid=503}};
+            \node[note,node distance=20] (x3) [below of=x2] {\small{...}};
+            \node[note,node distance=20] (x4) [below of=x3] {\small{xid=528}};
+            \node[note,node distance=20] (x5) [below of=x4] {\small{...}};
+
+            \node[note,node distance=50] [left of=x4] {\scriptsize{\makecell[l]{encrypt=$key_2$\\decrypt=$key_1$\\yid=319}}};
+
+            \draw[decorate,decoration={brace,amplitude=10}]
+			    (-155,-55) -- (-155,55) node[hide,midway,xshift=-20] {Client};
+
+            \draw[decorate,decoration={brace,amplitude=5}]
+			    (-105,-45) -- (-105,-15) node[hide,midway] {};
+
+            \draw[decorate,decoration={brace,amplitude=10}]
+			    (155,55) -- (155,-55) node[hide,midway,xshift=20] {Server};
+
+            \draw[decorate,decoration={brace,amplitude=5}]
+			    (105,-15) -- (105,-45) node[hide,midway] {};
+
+            \node[hide] (a0) at (-40, 20) {};
+            \node[hide] (a1) at (40, 20) {};
+
+            \node[hide] (b0) at (-40, -20) {};
+            \node[hide] (b1) at (40, -20) {};
+
+            \path[->,>=stealth',shorten >=1,auto]
+                (a0) edge node[note,above] {\footnotesize{xid=528}} (a1)
+                (b1) edge node[note,above] {\footnotesize{yid=319}} (b0);
+        }
+    \end{tikzpicture}
+}
+\caption{对称的通信过程}
+\end{figure}
+\end{small}
+
+简单描述数据包生成和接收过程如下：
+
+\begin{itemize}
+    \item [a.] Client与Server之间都维护session信息的映射关系；
+    \item [b.] 生成数据包时，使用加密密钥进行加密，并将对应的id写入数据包；
+    \item [c.] 读取数据包时，先通过id找到正确的session信息，用解密密钥进行解密后才能的到真正的数据；
+\end{itemize}
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!25]
+        \tikzstyle{data1} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {0,1,2,3,4,5,8,9,10} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,0) {};
+            }
+            \node[note] at (130, 0) {\small{\ldots}};
+            \node[note,node distance=35] [left of=a0] {数据包};
+
+            \foreach \number in {0,1,2,3,4,5} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data,fill=white] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {6,7,8,9,10,11,14,15,16} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {17,18,19} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (b\number) at (\dist,-50) {\scriptsize{0xff}};
+            }
+            \node[note] at (250, -50) {\small{\ldots}};
+            \node[note,node distance=35] [left of=b0] {缓冲区};
+
+            \path[->,>=stealth',shorten >=1,shorten <=1,auto]
+                (a0.south) edge (b6.north)
+                (a10.south) edge (b16.north);
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (390,-65) -- (70,-65) node[hide,midway] {\footnotesize{AES128 16字节对齐：不足则用0xff补齐}};
+        }
+    \end{tikzpicture}
+}
+\caption{数据包生成：构建缓冲区}\label{chap3:buffer}
+\end{figure}
+\end{small}
+
+构建缓冲区过程（图\ref{chap3:buffer}）：分配缓冲区时，要空出前6个字节，然后将要发送的数据拷贝到缓冲区；
+同时保证待加密数据长度满足16字节对齐，长度不足则用0xff补全。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!25]
+        \tikzstyle{data1} = [data,fill=gray!55]
+        \tikzstyle{data2} = [data,postaction={pattern=crosshatch dots}]
+        \tikzstyle{data3} = [data,fill=gray!10,postaction={pattern=north east lines,pattern color=black!70}]
+        {
+            \newcount\dist
+            \foreach \number in {0,1,2,3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data,fill=white] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {4,5} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {6,7,8,9,10,11,14,15,16} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {17,18,19} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (b\number) at (\dist,-50) {\scriptsize{0xff}};
+            }
+            \node[note] at (250, -50) {\small{\ldots}};
+            \node[note,node distance=35] [left of=b0] {缓冲区};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (110,-35) -- (390,-35) node[hide,midway] {\footnotesize{计算校验和checksum}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (110,-65) -- (70,-65) node[hide,midway] {\footnotesize{checksum}};
+
+            \foreach \number in {0,1,2,3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data,fill=white] (c\number) at (\dist,-110) {};
+            }
+            \foreach \number in {4,5,6,7,8,9,10,11,14,15,16,17,18,19} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3] (c\number) at (\dist,-110) {};
+            }
+            \node[note] at (250, -110) {\small{\ldots}};
+            \node[note,node distance=35] [left of=c0] {缓冲区};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (390,-125) -- (70,-125) node[hide,midway] {\footnotesize{AES128对数据加密}};
+        }
+    \end{tikzpicture}
+}
+\caption{数据包生成：数据包加密}\label{chap3:checksum}
+\end{figure}
+\end{small}
+
+数据包加密过程（图\ref{chap3:checksum}）：先计算全部数据的16位校验和，并将其写入到缓冲区第4、5字节位置；
+然后对包括校验、数据在内的待加密数据进行AES128加密。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,postaction={pattern=crosshatch dots}]
+        \tikzstyle{data1} = [data,postaction={pattern=north east lines,pattern color=black!70}]
+        {
+            \newcount\dist
+            \foreach \number in {0,1,2,3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {4,5,6,7,8,9,10,11,14,15,16,17,18,19} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (b\number) at (\dist,-50) {};
+            }
+            \node[note] at (250, -50) {\small{\ldots}};
+            \node[note,node distance=35] [left of=b0] {缓冲区};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (150,-65) -- (70,-65) node[hide,midway] {\footnotesize{$p_1$}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (230,-65) -- (150,-65) node[hide,midway] {\footnotesize{$p_2$}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (70,-65) -- (-10,-65) node[hide,midway] {\footnotesize{$p_0=yid \oplus p_1 \oplus p_2$}};
+        }
+    \end{tikzpicture}
+}
+\caption{数据包生成：写入session信息}\label{chap3:sessionid}
+\end{figure}
+\end{small}
+
+写入session信息过程（图\ref{chap3:sessionid}）：假设该过程是服务端xid向客户端yid发送数据包的过程，
+那么需要将服务端yid写入到数据包中，以便客户端收到该数据包能够找到对应的解密密钥等各种session信息。
+但是yid不是直接写到缓冲区的，
+而是通过yid与加密后的缓冲区的第2、3个32位整数进行异或操作，
+然后将的到的结果写入到缓冲区的前4个字节。
+
+\subsubsection{数据片格式}
+一个RTMFP数据包是由多个数据片直接拼接而成，其中每个数据片格式如下：
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        {
+            \newcount\dist
+            \foreach \number in {-3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {-2,-1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {0,9} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {1,2,10,11} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (b\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8,12,13} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (b\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+            \node[note] at (290, -50) {\small{\ldots \ldots}};
+            \node[note,node distance=35] [left of=b-3] {数据包};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-35) -- (-10,-35) node[hide,midway] {\footnotesize{time}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-65) -- (-70,-65) node[hide,midway] {\footnotesize{mark}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (190,-65) -- (170,-65) node[hide,midway] {\footnotesize{code}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (230,-65) -- (190,-65) node[hide,midway] {\footnotesize{size}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (310,-85) -- (-10,-85) node[hide,midway] {\footnotesize{多个数据片}};
+        }
+    \end{tikzpicture}
+}
+\caption{数据片格式}\label{chap3:package}
+\end{figure}
+\end{small}
+
+其中code$\ne$0xff，因此当数据片提取过程中遇到code为0xff时，
+即可认为遇到数据包结束。
+这种设计主要避免AES128加密过程中的缓冲区补全操作引入的额外字节。
+
+\section{握手过程}
+
+如图\ref{chap3:sessionid}所示，每一个通信数据包都包含了一组session信息。
+因此协议选择id$=$0作为握手过程，并用默认密钥进行加解密操作。
+
+协议握手过程一共分成4个步骤：
+
+\begin{itemize}
+    \item [A.] 客户端-服务端：客户端向服务端发起建立连接请求，服务端对请求进行验证；
+    \item [B.] 服务端-客户端：如果服务端接受请求，则返回动态生成的cookie进行响应；
+    \item [C.] 客户端-服务端：客户端开始DH算法，发送\{$x_b,\lambda_2$,yid$\ne$0\}给服务端；
+    \item [D.] 服务端-客户端：服务端响应DH算法，返回\{$x_a,\lambda_1$,xid$\ne$0\}给客户端；
+\end{itemize}
+
+握手过程每个数据包只包含一个数据片。
+在此过程之后，服务端和客户端都完成了AES128密钥的生成和计算以及session的建立，
+之后所有的通信过程都将在session的基础上完成。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto,start chain=going below]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=white]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{state}=[fill=white,circle,inner sep=0,minimum height=9]
+        {
+
+            \node[note] (labels) at (0, +50) {Server};
+            \node[note] (labelc) at (0, -50) {Client};
+
+            \draw let \p1=(labelc.east) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1+10,\y1) -- +(340,0);
+
+            \draw let \p1=(labels.east) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1+10,\y1) -- +(340,0);
+
+            \node[state,node distance=60] (c1) [right of=labelc] {};
+            \node[state,node distance=120] (c2) [right of=c1] {};
+            \node[state,node distance=120] (c3) [right of=c2] {};
+            \node[state,node distance=120] (s1) [right of=labels] {};
+            \node[state,node distance=120] (s2) [right of=s1] {};
+
+            \path[->,>=stealth',shorten >=1,auto,thick]
+                (c1) edge (s1)
+                (s1) edge (c2)
+                (c2) edge (s2)
+                (s2) edge (c3);
+
+            \node[note,node distance=42] [above right of=c1] {\footnotesize{msg=$\{app\}$}};
+            \node[note,node distance=42] [below right of=s1] {\footnotesize{msg=$\{cookie\}$}};
+            \node[note,node distance=42] [above right of=c2] {\footnotesize{msg=$\{x_b,\lambda_2,yid\}$}};
+            \node[note,node distance=42] [below right of=s2] {\footnotesize{msg=$\{x_a,\lambda_1,xid\}$}};
+        }
+    \end{tikzpicture}
+}
+\caption{握手过程}
+\end{figure}
+\end{small}
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {-3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x0b}};
+            }
+            \foreach \number in {-2,-1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x30}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-35) -- (-10,-35) node[hide,midway] {\footnotesize{time}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-65) -- (-70,-65) node[hide,midway] {\footnotesize{mark}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+            \node[note,node distance=35] [left of=a-3] {\small{数据包}};
+
+            \foreach \number in {1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data] (b\number) at (\dist,-120) {\scriptsize{ig.}};
+            }
+            \foreach \number in {2,3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (b\number) at (\dist,-120) {};
+            }
+            \foreach \number in {4} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-120) {\scriptsize{0x0a}};
+            }
+            \foreach \number in {6} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{uri}};
+            }
+            \foreach \number in {9} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{tag}};
+            }
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (70,-135) -- (30,-135) node[hide,midway] {\footnotesize{length}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (70,-105) -- (150,-105) node[hide,midway] {\footnotesize{共length字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (210,-135) -- (150,-135) node[hide,midway] {\footnotesize{共16字节}};
+
+            \path[draw]
+                (a3.south) -- (b1.north west)
+                (a8.south) -- (b9.north east);
+        }
+    \end{tikzpicture}
+}
+\caption{握手过程：过程A数据包}\label{chap3:handshakea}
+\end{figure}
+\end{small}
+
+过程A中（图\ref{chap3:handshakea}）：
+数据片中uri包含了客户端访问的app名称，服务端对其进行权限验证；
+由于此时客户端与服务端都没有创建session有关的数据结构，
+所以此时客户端生成临时tag作为标识，这与过程B中的cookie在服务端的作用一样。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {-3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x0b}};
+            }
+            \foreach \number in {-2,-1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x70}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-35) -- (-10,-35) node[hide,midway] {\footnotesize{time}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-65) -- (-70,-65) node[hide,midway] {\footnotesize{mark}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+            \node[note,node distance=35] [left of=a-3] {\small{数据包}};
+
+            \foreach \number in {1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-120) {\scriptsize{0x10}};
+            }
+            \foreach \number in {3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{tag}};
+            }
+            \foreach \number in {5} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-120) {\scriptsize{0x40}};
+            }
+            \foreach \number in {7} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{cookie}};
+            }
+            \foreach \number in {10} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{certificate}};
+            }
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (90,-135) -- (30,-135) node[hide,midway] {\footnotesize{共16字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (110,-105) -- (170,-105) node[hide,midway] {\footnotesize{共64字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (230,-135) -- (170,-135) node[hide,midway] {\footnotesize{共77字节}};
+
+            \path[draw]
+                (a3.south) -- (b1.north west)
+                (a8.south) -- (b10.north east);
+        }
+    \end{tikzpicture}
+}
+\caption{握手过程：过程B数据包}\label{chap3:handshakeb}
+\end{figure}
+\end{small}
+
+过程B中（图\ref{chap3:handshakeb}）：
+服务器生成响应过程A的数据包，其中包含客户端发来的标识符tag、服务端生成的cookie以及服务端证书certificate。
+
+客户端收到该数据包之后，会判断tag的合法性。如果合法，那么客户端会做好进入过程C的准备：
+创建客户端session数据结构，分配好yid、准备DH算法公钥$x_b$以及$\lambda_2$，并在过程C中联通服务端发来的cookie一起发送给服务端。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {-3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x0b}};
+            }
+            \foreach \number in {-2,-1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x38}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-35) -- (-10,-35) node[hide,midway] {\footnotesize{time}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-65) -- (-70,-65) node[hide,midway] {\footnotesize{mark}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+            \node[note,node distance=35] [left of=a-3] {\small{数据包}};
+
+            \foreach \number in {1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{yid}};
+            }
+            \foreach \number in {3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-120) {\scriptsize{0x40}};
+            }
+            \foreach \number in {5} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{cookie}};
+            }
+            \foreach \number in {7} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{size$_1$}};
+            }
+            \foreach \number in {10} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{pidraw}};
+            }
+
+            \foreach \number in {6} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=40] (c\number) at (10+\dist,-160) {\scriptsize{size$_2$}};
+            }
+            \foreach \number in {8,9} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data] (b\number) at (\dist,-160) {\scriptsize{ig.}};
+            }
+            \foreach \number in {11} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (c\number) at (\dist,-160) {\scriptsize{$x_b$}};
+            }
+            \foreach \number in {13} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=40] (c\number) at (10+\dist,-160) {\scriptsize{size$_3$}};
+            }
+            \foreach \number in {16} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (c\number) at (\dist,-160) {\scriptsize{$\lambda_2$}};
+            }
+
+            \path[>=stealth',shorten >=1pt,auto]
+                (b10.south) edge [dashed] (c6.north)
+                (a3.south) edge (b1.north west)
+                (a8.south) edge (c16.north east);
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-135) -- (10,-135) node[hide,midway] {\footnotesize{32bit}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (70,-105) -- (130,-105) node[hide,midway] {\footnotesize{共64字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (170,-105) -- (230,-105) node[hide,midway] {\footnotesize{共size$_1$字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (250,-175) -- (150,-175) node[hide,midway] {\footnotesize{共size$_2$字节}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (350,-175) -- (290,-175) node[hide,midway] {\footnotesize{共size$_3$字节}};
+        }
+    \end{tikzpicture}
+}
+\caption{握手过程：过程C数据包}\label{chap3:handshakec}
+\end{figure}
+\end{small}
+
+过程C中（图\ref{chap3:handshakec}）：
+数据包中包含了客户端为建立连接所准备的所有数据结构。
+
+服务端收到该消息之后，需要判断cookie的合法性。如果合法，
+则服务端也立即建立相应的服务端session数据结构，并分配好对应的xid、生成服务端DH算法公钥$x_a$和$\lambda_1$，
+并在下一过程D中将这些信息返回给客户端。
+除此之外，pidraw是由客户端生成的一段随机串，服务端使用pidraw.sha256作为该连接的pid。
+
+其中size$_1$、size$_2$、size$_3$均为7bit数（一种变长的整数表示方式）。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {-3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x0b}};
+            }
+            \foreach \number in {-2,-1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x78}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-35) -- (-10,-35) node[hide,midway] {\footnotesize{time}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-65) -- (-70,-65) node[hide,midway] {\footnotesize{mark}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+            \node[note,node distance=35] [left of=a-3] {\small{数据包}};
+
+            \foreach \number in {2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{xid}};
+            }
+            \foreach \number in {4} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{size$_1$}};
+            }
+            \foreach \number in {7} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{responder}};
+            }
+            \foreach \number in {9} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-120) {\scriptsize{0x58}};
+            }
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (70,-135) -- (30,-135) node[hide,midway] {\footnotesize{32bit}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (170,-135) -- (110,-135) node[hide,midway] {\footnotesize{共size$_1$字节}};
+
+            \path[draw]
+                (a3.south) -- (b2.north west)
+                (a8.south) -- (b9.north east);
+        }
+    \end{tikzpicture}
+}
+\caption{握手过程：过程D数据包}\label{chap3:handshaked}
+\end{figure}
+\end{small}
+
+过程D中（图\ref{chap3:handshaked}）：
+服务端将生成的xid、DH算法公钥$x_a$和$\lambda_1$（包含在responder中）返回给客户端，完成session的建立。
+
+客户端和服务端都需要将xid、yid写入自己的session数据结构中，并完成一对AES128密钥的生成操作。
+在握手过程结束以后，客户端和服务端之间的通信将基于session进行：
+生成完整UDP数据包时将需要使用正确的xid或者yid，以及使用正确的密钥进行加解密。
+
+\section{Session通信过程}
+在握手过程之后，所有的数据通信都建立在session的基础上。
+与握手过程略有不同的是，此时的通信过程一个数据包中可以包含连续的多个数据片。
+
+如图\ref{chap3:protocols}所示RTMFP三个协议层，此时通信的数据片可以分成两个集合：
+\begin{itemize}
+    \item [a.] session 粒度上的控制数据片；
+    \item [b.] flow 有关的数据片；
+\end{itemize}
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto,start chain=1 going above]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,minimum width=100,draw,node distance=6,inner sep=4]
+        {
+            \node[on chain=1] {\small{UDP Packet}};
+            \node[on chain=1] {\small{Data Fragment}};
+            \node[on chain=1] {\small{Flow Reader/Writer}};
+            \node[on chain=1] {\small{Application}};
+        }
+    \end{tikzpicture}
+}
+\caption{RTMFP协议层}\label{chap3:protocols}
+\end{figure}
+\end{small}
+
+与握手过程一样，Session通信过程的数据包也满足\ref{chap3:package}的格式，所不同的是，
+服务端收发过程的数据包中的mark值不同，具体数值可以参考服务端对request和response处理的代码。
+
+\subsection{控制数据片}
+
+\subsubsection{心跳}
+RTMFP心跳数据片分成两种，请求和响应。
+\begin{itemize}
+    \item [a.] 客户端在与服务端连接成功之后，xserver会将客户端心跳周期设置成20秒：即客户端每20秒向服务端发送一个心跳请求，服务端回复一个心跳响应。
+    \item [b.] 服务端会周期的检查客户端的通信情况，如果一定时间内（参见参数设置中的heartbeat）没有收到客户端的数据请求，
+服务端则会主动发送一个心跳请求，然后等待客户端的心跳响应。
+\end{itemize}
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        {
+            \newcount\dist
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x01}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+            \node[note,node distance=35] [left of=a0] {请求};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+        }
+        {
+            \newcount\dist
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-100) {\scriptsize{0x41}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (b\number) at (\dist,-100) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (b\number) at (\dist,-100) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+            \node[note,node distance=35] [left of=b0] {响应};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-85) -- (170,-85) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-115) -- (10,-115) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-115) -- (-10,-115) node[hide,midway] {\footnotesize{code}};
+        }
+    \end{tikzpicture}
+}
+\caption{Session通信：心跳}
+\end{figure}
+\end{small}
+
+\subsubsection{关闭连接}
+RTMFP关闭连接的数据片也分成两种，请求和响应。
+主动关闭的端发送请求消息，另一端收到请求片之后发送响应消息进行响应。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        {
+            \newcount\dist
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x0c}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+            \node[note,node distance=35] [left of=a0] {请求};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+        }
+        {
+            \newcount\dist
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-100) {\scriptsize{0x4c}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (b\number) at (\dist,-100) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (b\number) at (\dist,-100) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+            \node[note,node distance=35] [left of=b0] {响应};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-85) -- (170,-85) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-115) -- (10,-115) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-115) -- (-10,-115) node[hide,midway] {\footnotesize{code}};
+        }
+    \end{tikzpicture}
+}
+\caption{Session通信：关闭连接}
+\end{figure}
+\end{small}
+
+\subsubsection{内部错误}
+在处理flow的过程中，如果出现无法恢复的严重错误，可以发送请求主动关闭该flow。
+数据片结构如下图：
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x5e}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+            \node[note,node distance=35] [left of=a0] {请求};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+        }
+    \end{tikzpicture}
+}
+\caption{Session通信：内部错误}
+\end{figure}
+\end{small}
+
+数据片中包含一个7bit数表示出错的flow的fid。
+
+\subsubsection{其他}
+{\bf{xserver仅仅实现了RTMFP协议的子集，对于未知的code，
+xserver会主动发起关闭连接请求来断开与客户端的连接。}}
+
+\subsection{flow中的数据片}
+
+\subsubsection{应用层数据片切割}
+RTMFP协议中，尽可能要求一个UDP包大小不超过一个MTU。
+因此应用层发送数据之前，需要将数据切割成满足该条件的一个或者多个数据片（这里只flow中的数据碎片fragment），
+并将数据片放入发送缓存中。最后，需要对缓存中的数据进行flush或者丢包重传时，
+需要将一个或者多个数据片按照图\ref{chap3:package}中的方法组装成一个数据包。
+
+为了既满足这些限制，又要尽可能的减少UDP包的个数，xserver采用一个折中方案，
+即预先将所有应用层的数据切割成大小不超过256字节的数据片：
+\begin{itemize}
+    \item [a.] 数据片越小，发送过程数据片装包越灵活，但是考虑到每个片都要维护一些信息，这样无效的开销也越大；
+    \item [b.] 数据片越大，装包越不灵活，发送的UDP包个数也可能越多； 
+\end{itemize}
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto,start chain=1 going right]]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{object}=[fill=white,circle,inner sep=0,minimum height=34]
+        \tikzstyle{fragment} = [draw=black,minimum width=40, minimum height=20, node distance=20,fill=white]
+        {
+
+            \node[fragment,on chain=1] (a0) {\footnotesize{frag$_0$}};
+            \node[fragment,on chain=1] (a1) {\footnotesize{$\dots$}};
+            \node[fragment,on chain=1] (a2) {\footnotesize{frag$_3$}};
+            \node[fragment,on chain=1] (a3) {\footnotesize{frag$_4$}};
+            \node[fragment,on chain=1] (a4) {\footnotesize{frag$_5$}};
+            \node[fragment,on chain=1] (a5) {\footnotesize{frag$_6$}};
+            \node[fragment,on chain=1] (a6) {\footnotesize{frag$_7$}};
+            \node[fragment,on chain=1] (a7) {\footnotesize{$\dots$}};
+
+            \node[object] (b0) at (90, 70) {\footnotesize{object$_1$}};
+            \node[object] (b1) at (270, 70) {\footnotesize{object$_2$}};
+            \node[object] (b2) at (390, 70) {\footnotesize{$\dots$}};
+
+            \path[draw]
+                (b0.south) -- (a0.north)
+                (b0.south) -- (a3.north)
+                (b1.south) -- (a4.north)
+                (b1.south) -- (a5.north);
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (140,-20) -- (-20,-20) node[hide,midway] {\footnotesize{packet$_1$=4$\times$frags}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (440,-20) -- (160,-20) node[hide,midway] {\footnotesize{packet$_2$=?$\times$frags}};
+        }
+    \end{tikzpicture}
+}
+\caption{Session通信：数据切片与装包}
+\end{figure}
+\end{small}
+
+\subsubsection{fragment格式与组织}
+
+将应用层的数据进行切片，得到的数据结构如下：
+
+\begin{javacode}
+    public class Fragment {
+        public long stage;         # `{\songti 数据片序号}`
+        public int flags;          # `{\songti 一些标志}`
+        public byte[] data;        # `{\songti 数据内容}`
+    };
+\end{javacode}
+
+在每一个flow中，都分别独立的维护了收、发两个缓冲区，并利用这些缓冲区，来保证收发数据的FIFO和Reliable性质。
+
+其中flags的不同位可以表示如下意义，具体实现可以参见代码：
+\begin{itemize}
+    \item [a.] 应用层数据的第一个数据片；
+    \item [b.] 应用层数据的最后一个数据片；
+    \item [c.] 当前flow的最后一个数据片；
+    \item [d.] 当前数据片内容无意义；
+\end{itemize}
+
+例如：对于应用层数据切片，第一个片都具有标志a，最后一个片都具有标志b；
+如果应用层数据不满256字节，即只切割成一个数据片，那么该片同时具有a、b两个标志位；
+如果数据片具有标志c，则该数据片可丢弃；
+如果数据片具有标志d，那么该数据片为当前flow最后一个数据片，xserver会关闭该flow。
+
+具体操作的理解，请参考flow reader/writer的实现，:P。
+
+\subsubsection{ack数据包}
+RTMFP协议中，客户端每收到一个服务端或者服务端每收到一个客户端的数据包时，
+都会生成一个ack来告知对方已经收到数据，用以删除缓冲区中的缓存。
+
+在xserver中，ack还有一个功能是驱动被动丢包重传。这比主动重传响应时间更短。
+
+实现中，每个ack的可以表示为一组连续的不相邻的闭区间的并，表示当前已经收到的数据片的stage集合，例如：
+\begin{small}
+\begin{center}
+$[s_0, s_1]\cup[s_2,s_3]\cup[s_4,s_5]\cup\dots\cup[s_{2n},s_{2_n+1}]$，其中 $s_0=0,s_{2i}\le s_{2i+1},s_{2i+1}+1 < s_{2i+2}$
+\end{center}
+\end{small}
+那么又知道7bit数数值越小，序列化后越节省空间。那么可以定义另外一组数，如下：
+\begin{small}
+\begin{equation*}
+\left\{
+\begin{array}{r@{\;=\;}l}
+    b_0 & s_0 = 0\\
+    b_{2i + 1} & s_{2i + 1} - s_{2i}\\
+    b_{2i + 2} & s_{2i + 2} - s_{2i + 1} - 2
+\end{array}
+\right.
+\end{equation*}
+\end{small}
+而序列$b_1,b_2,\dots,b_{2n+1}$即为ack序列化之后的结果，如图：
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x51}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+            \node[note,node distance=25] [left of=a0] {\small{ack}};
+
+            \foreach \number in {1,3,5} {
+                \dist=\number
+                \multiply\dist by 40
+                \node[data3,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{$b_\number$}};
+            }
+            \foreach \number in {2,4} {
+                \dist=\number
+                \multiply\dist by 40
+                \node[data0,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{$b_\number$}};
+            }
+            \node[data0,minimum width=40] (b6) at (250,-120) {\scriptsize{$\dots$}};
+            \path[draw]
+                (a3.south) -- (b1.north west)
+                (a8.south) -- (b6.north east);
+        }
+    \end{tikzpicture}
+}
+\caption{Session通信过程：ack数据片}
+\end{figure}
+\end{small}
+
+\subsubsection{0x10数据包}
+在将多个数据片装如一个数据包时，除了写入数据片信息，还要写入数据片所属flow的信息。
+客户端和服务端对应flow信息确认如下：
+\begin{itemize}
+    \item [a.] 如果writer如果从未收到过来自reader的该flow的ack，那么writer需要写完整的flow信息，以便reader能够建立正确的flow数据结构和映射关系；
+    \item [b.] 如果writer曾经收到过来自reader的属于该flow的ack，那么writer只需要写如flow对应的fid即可；
+\end{itemize}
+
+该数据片中还有一个重要的数据结构，stageack。它表示writer收到的来自与reader的ack中，最大的连续的stage序号，
+即上一节中的$s_1$的值。
+
+如果reader收到一个比发送给writer的$s_1$还要大的stageack值时，
+表示writer并不关心reader是否全部收到满足区间$[s_1,$stageack$]$的数据片，
+也就是writer不会对这区间的数据片进行丢包重传。
+所以此时reader会放弃这中间不完整的数据，而向前跳。
+利用这种性质，能够巧妙的在服务端实现上行或者下行的高效的unreliable数据通道。
+
+数据片格式如下：
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x10}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+            \node[note,node distance=45] [left of=a0] {\small{0x10数据片}};
+
+            \foreach \number in {1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=20] (b\number) at (20+\dist,-120) {\scriptsize{flags}};
+            }
+            \foreach \number in {3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{fid}};
+            }
+            \foreach \number in {5} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{stage}};
+            }
+            \foreach \number in {7} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{delta}};
+            }
+            \foreach \number in {9} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (b\number) at (20+\dist,-120) {\scriptsize{header}};
+            }
+            \foreach \number in {12} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=60] (b\number) at (20+\dist,-120) {\scriptsize{$\dots$}};
+            }
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (170,-135) -- (50,-135) node[hide,midway] {\footnotesize{3个7bit数}};
+
+            \path[draw]
+                (a3.south) -- (b1.north west)
+                (a8.south) -- (b12.north east);
+        }
+    \end{tikzpicture}
+}
+\caption{Session通信过程：0x10数据片}
+\end{figure}
+\end{small}
+
+其中stageack=stage-delta，同样由于这样编码使得数据包体积更小；
+header以空字符串作为结束标志；剩余字节中，出去header的内容，其他都为数据片中的数据。
+剩余字节中，出去header
+
+\subsubsection{0x11数据包}
+RTMFP协议中通过0x11数据片来进一步节省空间：
+如果即将写入的数据片与前一个数据片来自与同一个flow，并且stage是连续的下一个，
+那么实际上可以省略这些stage的空间。RTMFP协议中通过0x11数据包来实现这样的功能。
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x11}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+            \node[note,node distance=45] [left of=a0] {\small{0x11数据片}};
+
+            \foreach \number in {1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=20] (b\number) at (20+\dist,-120) {\scriptsize{flags}};
+            }
+            \foreach \number in {3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=60] (b\number) at (20+\dist,-120) {\scriptsize{$\dots$}};
+            }
+            \path[draw]
+                (a3.south) -- (b1.north west)
+                (a8.south) -- (b3.north east);
+
+            \foreach \number in {0,4} {
+                \dist=\number
+                \multiply\dist by 40
+                \node[data0,minimum width=40] (b\number) at (\dist,-190) {\scriptsize{0x10}};
+            }
+            \foreach \number in {1,2,3,5,6} {
+                \dist=\number
+                \multiply\dist by 40
+                \node[data3,minimum width=40] (b\number) at (\dist,-190) {\scriptsize{0x11}};
+            }
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (20,-205) -- (-20,-205) node[hide,midway] {\footnotesize{fid=1,stage=127}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (180,-205) -- (140,-205) node[hide,midway] {\footnotesize{fid=1,stage=135}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (20,-175) -- (140,-175) node[hide,midway] {\footnotesize{stage=128,129,130}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (180,-175) -- (260,-175) node[hide,midway] {\footnotesize{stage=136，137}};
+
+            \node[note,node distance=45] [below of=b3] {\small{多数据片拼接}};
+        }
+    \end{tikzpicture}
+}
+\caption{Session通信过程：0x11数据片}
+\end{figure}
+\end{small}
+
+\subsubsection{unreliable消息}
+所谓unreliable消息是针对应用层而言的。
+xserver通过修改stageack来达到这个目的。
+
+{\bf{服务端-客户端：}}服务端作为writer，客户端作为reader的过程。
+假设服务端发送先后发送数据\{$o_1$,$o_2$\}到客户端，
+并且发送$o_1$过程中出现丢包，那么即便客户端完全收到$o_2$消息，
+也需要等待$o_1$的丢包重传。而xserver所做的优化是在发送$o_2$的过程中，
+主动修改stageack的值为$o_1$最后一个数据片的stage，使得客户端一旦收到$o_2$的数据片便会直接忽略尚在等待的$o_1$数据。
+假设，$o_1=\{m_{197},m_{198}\}$以及$o_2=\{m_{199},m_{200}\}$，过程如下：
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,above,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{state}=[fill=white,circle,inner sep=0,minimum height=9]
+        {
+            \node[note] (labelc) at (0, 0) {Client};
+            \node[note] (labels) at (140, 0) {Server};
+
+            \draw let \p1=(labelc.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-300);
+
+            \draw let \p1=(labels.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-300);
+
+            \node[state,node distance=40] (s1) [below of=labels] {};
+            \node[state,node distance=40] (s2) [below of=s1] {};
+            \node[state,node distance=40] (s3) [below of=s2] {};
+            \node[state,node distance=40] (s4) [below of=s3] {};
+            \node[state,node distance=80] (s5) [below of=s4] {};
+            \node[state,node distance=80] (c1) [below of=labelc] {};
+            \node[state,node distance=40,dashed] (c2) [below of=c1] {};
+            \node[state,node distance=40] (c3) [below of=c2] {};
+            \node[state,node distance=40] (c4) [below of=c3] {};
+            \node[state,node distance=80] (c5) [below of=c4] {};
+            
+            \node[note,node distance=45,text width=70] (d1) [left of=c1] {\hfill\footnotesize{\{197\}}};
+            \node[note,node distance=45,text width=70] (d3) [left of=c3] {\hfill\footnotesize{\{197,199\}}};
+            \node[note,node distance=45,text width=70] (d4) [left of=c4] {\hfill\footnotesize{\{197,199,200\}}};
+            \node[note,node distance=45,text width=70] (d5) [left of=c5] {\hfill\footnotesize{\{197,198,199,200\}}};
+            \node[note,node distance=15,text width=70] (e5) [below of=d5] {\hfill\footnotesize{$\rightarrow\{o_1,o_2\}$}};
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (s1) edge (c1)
+                (s2) edge[dashed] (c2)
+                (s3) edge (c3)
+                (s4) edge (c4)
+                (c4) edge (s5)
+                (s5) edge (c5);
+            \path[above,every node/.style={font=\sffamily\footnotesize}]
+                (s1) -- node[sloped] {msg=197,stageack=196} (c1)
+                (s2) -- node[sloped] {msg=198,stageack=196} (c2)
+                (s3) -- node[sloped] {msg=199,stageack=196} (c3)
+                (s4) -- node[sloped] {msg=200,stageack=196} (c4)
+                (c4) -- node[sloped] {ack=197$\cup$[199,200]} (s5)
+                (s5) -- node[sloped] {msg=198,stageack=197} (c5);
+
+            \node[note] at (70, -300) {\small{默认策略}};
+        }
+        {
+            \node[note] (labelc) at (240, 0) {Client};
+            \node[note] (labels) at (380, 0) {Server};
+
+            \draw let \p1=(labelc.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-300);
+
+            \draw let \p1=(labels.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-300);
+
+            \node[state,node distance=40] (s1) [below of=labels] {};
+            \node[state,node distance=40] (s2) [below of=s1] {};
+            \node[state,node distance=40] (s3) [below of=s2] {};
+            \node[state,node distance=40] (s4) [below of=s3] {};
+            \node[state,node distance=80] (s5) [below of=s4] {};
+            \node[state,node distance=80] (c1) [below of=labelc] {};
+            \node[state,node distance=40,dashed] (c2) [below of=c1] {};
+            \node[state,node distance=40] (c3) [below of=c2] {};
+            \node[state,node distance=40] (c4) [below of=c3] {};
+            
+            \node[note,node distance=45,text width=70] (d1) [left of=c1] {\hfill\footnotesize{\{197\}}};
+            \node[note,node distance=45,text width=70] (d3) [left of=c3] {\hfill\footnotesize{\{199\}}};
+            \node[note,node distance=45,text width=70] (d4) [left of=c4] {\hfill\footnotesize{\{199,200\}}};
+            \node[note,node distance=15,text width=70] (e4) [below of=d4] {\hfill\footnotesize{$\rightarrow\{o_2\}$}};
+
+            \node[hide,node distance=45,minimum width=70] [right of=s4] {};
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (s1) edge (c1)
+                (s2) edge[dashed] (c2)
+                (s3) edge (c3)
+                (s4) edge (c4)
+                (c4) edge (s5);
+            \path[above,every node/.style={font=\sffamily\footnotesize}]
+                (s1) -- node[sloped] {msg=197,stageack=196} (c1)
+                (s2) -- node[sloped] {msg=198,stageack=196} (c2)
+                (s3) -- node[sloped] {msg=199,stageack={\underline{198}}} (c3)
+                (s4) -- node[sloped] {msg=200,stageack={\underline{198}}} (c4)
+                (c4) -- node[sloped] {ack=200} (s5);
+
+            \node[note] at (310, -300) {\small{优化策略}};
+        }
+    \end{tikzpicture}
+}
+\caption{服务端-客户端：unreliable消息}
+\end{figure}
+\end{small}
+
+{\bf{客户端-服务端：}}客户端作为writer，服务端作为reader的过程。
+客户端是flash实现，当客户端发送的unreliable数据发生丢包的时候，需要通过服务端的ack进行判断，
+并根据情况发送一些特殊的空包来驱动服务端跳过这些未收到的数据。
+
+例如，假设客户端发送消息$\{o_1,o_2,\dots\}=\{m_{197},m_{198},\dots\}$到服务端，如下图：
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,above,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{state}=[fill=white,circle,inner sep=0,minimum height=9]
+        {
+            \node[note] (labelc) at (0, 0) {Client};
+            \node[note] (labels) at (140, 0) {Server};
+
+            \draw let \p1=(labelc.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-300);
+
+            \draw let \p1=(labels.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-300);
+
+            \node[state,node distance=80] (s1) [below of=labels] {};
+            \node[state,node distance=40] (s2) [below of=s1] {};
+            \node[state,node distance=40] (s3) [below of=s2] {};
+            \node[state,node distance=40] (s4) [below of=s3] {};
+            \node[state,node distance=80] (s5) [below of=s4] {};
+            \node[state,node distance=40,dashed] (c1) [below of=labelc] {};
+            \node[state,node distance=40] (c2) [below of=c1] {};
+            \node[state,node distance=40] (c3) [below of=c2] {};
+            \node[state,node distance=40] (c4) [below of=c3] {};
+            \node[state,node distance=80] (c5) [below of=c4] {};
+            
+            \node[note,node distance=45,text width=70] (d2) [right of=s2] {\footnotesize{\{198\}}};
+            \node[note,node distance=45,text width=70] (d3) [right of=s3] {\footnotesize{\{198,199\}}};
+            \node[note,node distance=45,text width=70] (d4) [right of=s4] {\footnotesize{\{198,199,200\}}};
+            \node[note,node distance=45,text width=70] (d5) [right of=s5] {\footnotesize{\{198,199,200\}}};
+            \node[note,node distance=15,text width=70] (e5) [below of=d5] {\footnotesize{$\rightarrow\{o_2,o_3,o_4\}$}};
+
+            \node[hide,node distance=45,minimum width=70] [left of=c4] {};
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (c1) edge[dashed] (s1)
+                (c2) edge (s2)
+                (c3) edge (s3)
+                (c4) edge (s4)
+                (s4) edge (c5)
+                (c5) edge (s5);
+            \path[above,every node/.style={font=\sffamily\footnotesize}]
+                (s1) -- node[sloped] {msg=197,stageack=196} (c1)
+                (s2) -- node[sloped] {msg=198,stageack=196} (c2)
+                (s3) -- node[sloped] {msg=199,stageack=196} (c3)
+                (s4) -- node[sloped] {msg=200,stageack=196} (c4)
+                (s4) -- node[sloped] {ack=197$\cup$[199,200]} (c5)
+                (s5) -- node[sloped] {skip=198,stageack=197} (c5);
+
+            \node[note] at (70, -300) {\small{默认策略}};
+        }
+        {
+            \node[note] (labelc) at (240, 0) {Client};
+            \node[note] (labels) at (380, 0) {Server};
+
+            \draw let \p1=(labelc.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-300);
+
+            \draw let \p1=(labels.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-300);
+
+            \node[state,node distance=80] (s1) [below of=labels] {};
+            \node[state,node distance=40] (s2) [below of=s1] {};
+            \node[state,node distance=40] (s3) [below of=s2] {};
+            \node[state,node distance=40] (s4) [below of=s3] {};
+            \node[state,node distance=40,dashed] (c1) [below of=labelc] {};
+            \node[state,node distance=40] (c2) [below of=c1] {};
+            \node[state,node distance=40] (c3) [below of=c2] {};
+            \node[state,node distance=40] (c4) [below of=c3] {};
+            \node[state,node distance=80] (c5) [below of=c4] {};
+            
+            \node[note,node distance=45,text width=70] (d2) [right of=s2] {\footnotesize{\{198\}}};
+            \node[note,node distance=15,text width=70] (e2) [below of=d2] {\footnotesize{$\rightarrow\{o_2\}$}};
+            \node[note,node distance=45,text width=70] (d3) [right of=s3] {\footnotesize{\{199\}}};
+            \node[note,node distance=15,text width=70] (e3) [below of=d3] {\footnotesize{$\rightarrow\{o_3\}$}};
+            \node[note,node distance=45,text width=70] (d4) [right of=s4] {\footnotesize{\{200\}}};
+            \node[note,node distance=15,text width=70] (e4) [below of=d4] {\footnotesize{$\rightarrow\{o_5\}$}};
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (c1) edge[dashed] (s1)
+                (c2) edge (s2)
+                (c3) edge (s3)
+                (c4) edge (s4)
+                (s4) edge (c5);
+            \path[above,every node/.style={font=\sffamily\footnotesize}]
+                (s1) -- node[sloped] {msg=197,stageack=196} (c1)
+                (s2) -- node[sloped] {msg=198,stageack=196} (c2)
+                (s3) -- node[sloped] {msg=199,stageack=196} (c3)
+                (s4) -- node[sloped] {msg=200,stageack=196} (c4)
+                (s4) -- node[sloped] {ack=200} (c5);
+            \path[below,every node/.style={font=\sffamily\footnotesize}]
+                (s2) -- node[sloped] {fake.stageack={\underline{197}}} (c2)
+                (s3) -- node[sloped] {fake.stageack={\underline{198}}} (c3)
+                (s4) -- node[sloped] {fake.stageack={\underline{199}}} (c4);
+
+            \node[note] at (310, -300) {\small{优化策略}};
+        }
+    \end{tikzpicture}
+}
+\caption{客户端-服务端：unreliable消息}
+\end{figure}
+\end{small}
+
+\newpage
+
+\section{P2P过程}
+假设客户端P$_1$主动发起与客户端P$_2$的P2P过程，流程如下：
+
+\begin{small}
+\begin{figure}[h!]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,above,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{state}=[fill=white,circle,inner sep=0,minimum height=9]
+        {
+            \node[note] (labelc1) at (-100, 0) {Client$_1$=P$_1$};
+            \node[note] (labels) at (0, 0) {Server};
+            \node[note] (labelc2) at (100, 0) {Client$_2$=P$_2$};
+
+            \draw let \p1=(labelc1.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-150);
+
+            \draw let \p1=(labelc2.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-150);
+
+            \draw let \p1=(labels.south) in (\x1,\y1)
+                node[hide,anchor=north west] {}
+                    [->] (\x1,\y1-3) -- +(0,-150);
+
+            \node[state,node distance=30] (c1) [below of=labelc1] {};
+            \node[state,node distance=80] (c2) [below of=c1] {};
+            \node[state,node distance=70] (s1) [below of=labels] {};
+            \node[state,node distance=20] (s2) [below of=s1] {};
+            \node[state,node distance=130] (c3) [below of=labelc2] {};
+
+            \path[->,>=stealth',shorten >=1pt,auto]
+                (c1) edge (s1)
+                (s1) edge (c2)
+                (s2) edge (c3);
+            \path[above,every node/.style={font=\sffamily\footnotesize}]
+                (s1) -- node[sloped] {P$_2$.pid} (c1)
+                (s1) -- node[sloped] {P$_2$.addrlist} (c2)
+                (s2) -- node[sloped] {P$_1$.addr} (c3);
+        }
+    \end{tikzpicture}
+}
+\caption{P2P过程}
+\end{figure}
+\end{small}
+
+具体过程如下：
+\begin{itemize}
+    \item [a.] P$_1$发送P2P请求给服务端，其中消息中包好P$_2$的pid；
+    \item [b.] 服务端向P$_1$发送P$_2$的全部地址，包括外网地址以及内网地址；
+    \item [c.] 服务端向P$_2$发送P$_1$的一个地址，通常是外网地址，用于P$_2$在NAT上打洞；
+    \item [d.] P$_1$和P$_2$尝试建立P2P连接；
+\end{itemize}
+
+P$_1$发向xserver的数据包与握手过程A（图\ref{chap3:handshakea}）的数据包几乎完全一样，请求包与响应包结构如下：
+
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {-3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x0b}};
+            }
+            \foreach \number in {-2,-1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x30}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-35) -- (-10,-35) node[hide,midway] {\footnotesize{time}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-65) -- (-70,-65) node[hide,midway] {\footnotesize{mark}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+            \node[note,node distance=35] [left of=a-3] {\small{数据包}};
+
+            \foreach \number in {1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data] (b\number) at (\dist,-120) {\scriptsize{ig.}};
+            }
+            \foreach \number in {2,3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (b\number) at (\dist,-120) {};
+            }
+            \foreach \number in {4} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (\dist,-120) {\scriptsize{0x0f}};
+            }
+            \foreach \number in {6} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{pid}};
+            }
+            \foreach \number in {9} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=60] (b\number) at (\dist,-120) {\scriptsize{tag}};
+            }
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (70,-135) -- (30,-135) node[hide,midway] {\footnotesize{length}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (70,-105) -- (150,-105) node[hide,midway] {\footnotesize{共length字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (210,-135) -- (150,-135) node[hide,midway] {\footnotesize{共16字节}};
+
+            \path[draw]
+                (a3.south) -- (b1.north west)
+                (a8.south) -- (b9.north east);
+        }
+        {
+            \newcount\dist
+            \foreach \number in {-3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (c\number) at (\dist,-180) {\scriptsize{0x0b}};
+            }
+            \foreach \number in {-2,-1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (c\number) at (\dist,-180) {};
+            }
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (c\number) at (\dist,-180) {\scriptsize{0x71}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (c\number) at (\dist,-180) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (c\number) at (\dist,-180) {};
+            }
+            \node[note] at (110, -180) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-165) -- (170,-165) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-165) -- (-10,-165) node[hide,midway] {\footnotesize{time}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (-50,-195) -- (-70,-195) node[hide,midway] {\footnotesize{mark}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-195) -- (10,-195) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-195) -- (-10,-195) node[hide,midway] {\footnotesize{code}};
+            \node[note,node distance=35] [left of=c-3] {\small{数据包}};
+
+            \foreach \number in {1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (d\number) at (\dist,-250) {\scriptsize{0x10}};
+            }
+            \foreach \number in {3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=60] (d\number) at (\dist,-250) {\scriptsize{tag}};
+            }
+            \foreach \number in {6} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=60] (d\number) at (\dist,-250) {\scriptsize{addrlist}};
+            }
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (90,-265) -- (30,-265) node[hide,midway] {\footnotesize{共16字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (150,-265) -- (90,-265) node[hide,midway] {\footnotesize{地址列表}};
+
+            \path[draw]
+                (c3.south) -- (d1.north west)
+                (c8.south) -- (d6.north east);
+        }
+    \end{tikzpicture}
+}
+\caption{P2P过程：P$_1$请求与响应数据包}
+\end{figure}
+\end{small}
+
+xserver发送给P$_2$的数据片通过的是已经xserver与P$_2$已经建立好的flow连接，与控制数据片相似，数据片格式如下：
+\begin{small}
+\begin{figure}[h]
+\centering
+\scalebox{0.95}{
+    \begin{tikzpicture}[x=1pt,y=1pt,auto]
+        \tikzstyle{every node}=[fill=none,rectangle,minimum height=18,draw,node distance=0,inner sep=0]
+        \tikzstyle{note}=[draw=none,opaque,fill=none]
+        \tikzstyle{hide}=[note,minimum width=0]
+        \tikzstyle{data} = [draw=black,minimum width=20, minimum height=20, node distance=20,fill=white]
+        \tikzstyle{data0} = [data,fill=gray!15]
+        \tikzstyle{data1} = [data,fill=gray!85]
+        \tikzstyle{data2} = [data,postaction={pattern=north east lines}]
+        \tikzstyle{data3} = [data,fill=gray!55]
+        {
+            \newcount\dist
+            \foreach \number in {0} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (a\number) at (\dist,-50) {\scriptsize{0x0f}};
+            }
+            \foreach \number in {1,2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data1] (a\number) at (\dist,-50) {};
+            }
+            \foreach \number in {3,4,7,8} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data2] (a\number) at (\dist,-50) {};
+            }
+            \node[note] at (110, -50) {\small{\ldots}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-35) -- (170,-35) node[hide,midway] {\footnotesize{内容共size字节}};
+
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (50,-65) -- (10,-65) node[hide,midway] {\footnotesize{size}};
+            \draw[decorate,decoration={brace,amplitude=3}]
+			    (10,-65) -- (-10,-65) node[hide,midway] {\footnotesize{code}};
+
+            \foreach \number in {1} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3] (b\number) at (20+\dist,-120) {\scriptsize{0x22}};
+            }
+            \foreach \number in {2} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0] (b\number) at (20+\dist,-120) {\scriptsize{0x21}};
+            }
+            \foreach \number in {3} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3] (b\number) at (20+\dist,-120) {\scriptsize{0x0f}};
+            }
+            \foreach \number in {5} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{pid}};
+            }
+            \foreach \number in {7} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data3,minimum width=40] (b\number) at (10+\dist,-120) {\scriptsize{addr}};
+            }
+            \foreach \number in {9} {
+                \dist=\number
+                \multiply\dist by 20
+                \node[data0,minimum width=60] (b\number) at (20+\dist,-120) {\scriptsize{tag}};
+            }
+            \path[draw]
+                (a3.south) -- (b1.north west)
+                (a8.south) -- (b9.north east);
+        }
+    \end{tikzpicture}
+}
+\caption{P2P过程：P$_2$收到数据片}
+\end{figure}
+\end{small}
+
+

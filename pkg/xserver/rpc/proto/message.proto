@@ -1,0 +1,32 @@
+package rpc;
+
+message XRequest {
+    required uint32         port        = 1;
+    required string         code        = 2;
+    required bool           reliable    = 3;
+    required double         callback    = 4;
+    optional string         addr        = 5;
+    optional bytes          data        = 8;
+    required uint32         xid         = 9;
+};
+
+message XResponse {
+    required bool           reliable    = 3;
+    required double         callback    = 4;
+    optional bytes          data        = 8;
+    required uint32         xid         = 9;
+};
+
+message XMessage {
+    message Broadcast {
+        required bool       reliable    = 3;
+        optional bytes      data        = 8;
+        repeated uint32     xids        = 9;
+    };
+    message Close {
+        repeated uint32     xids        = 9;
+    };
+    optional Broadcast      broadcast   = 1;
+    optional Close          close       = 2;
+};
+
