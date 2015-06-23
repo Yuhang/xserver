@@ -1,5 +1,6 @@
 *.log
 *.swp
+.DS_Store
 
 /log/
 /xserver

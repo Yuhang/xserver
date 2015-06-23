@@ -1,6 +1,6 @@
 .DEFAULT_GOAL = all
 
-all: ppt
+all: ppt doc
 
 doc:
 	@mkdir -p output/chaps
