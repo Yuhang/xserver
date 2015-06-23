@@ -3,5 +3,4 @@
 .DS_Store
 
 /log/
-/xserver
-/xserver.*
+/bin/

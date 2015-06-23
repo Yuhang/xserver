@@ -5,18 +5,18 @@ args	:=-rtmfp=1945,1946 -ncpu=1 -parallel=32 -apps=introduction,askFor \
 	-http=6000 -debug -heartbeat=5
 
 all: build-version
-	go build -o xserver cmd/main.go
-	@cp -f xserver xserver.`git log --date=iso --pretty=format:"%h" -1`
-	./xserver ${args}
+	go build -o bin/xserver cmd/main.go
+	@cp -f bin/xserver bin/xserver.`git log --date=iso --pretty=format:"%h" -1`
+	./bin/xserver ${args}
 
 debug: build-version
-	go build -o xserver.prof cmd/prof.go
-	./xserver.prof ${args}
+	go build -o bin/xserver.prof cmd/prof.go
+	./bin/xserver.prof ${args}
 
 build-version:
 	@bash genver.sh
 
 clean:
-	@rm -f xserver xserver.*
-	@cd log && find -type f -exec truncate -s 0 {} \;
+	@rm -rf bin/
+	@if [ -d log ]; then cd log && truncate -s 0 *; fi
 
